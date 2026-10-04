@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - 'nova-kz.zip'
+      - 'tools/nova_patch_supabase.py'
       - '.github/workflows/android-build.yml'
 
 permissions:
@@ -49,6 +50,11 @@ jobs:
           test -f nova-kz-project/settings.gradle.kts
           test -f nova-kz-project/app/build.gradle.kts
           test -f nova-kz-project/gradle/wrapper/gradle-wrapper.properties
+      - name: Apply NOVA Supabase client fix
+        run: |
+          python3 tools/nova_patch_supabase.py nova-kz-project
+          grep -R "PUBLISHABLE_KEY" -n nova-kz-project/app/src/main/java/com/example/network/SupabaseEndpoints.kt
+          grep -R "Configuração do Supabase não está disponível" -n nova-kz-project/app/src/main/java/com/example/network/SupabaseRestClient.kt || true
       - name: Generate debug keystore for CI fallback
         working-directory: nova-kz-project
         run: |
