@@ -1,0 +1,61 @@
+name: NOVA KZ Supabase Flow Inspection
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract project
+        run: |
+          rm -rf nova-kz-project
+          mkdir nova-kz-project
+          unzip -q nova-kz.zip -d nova-kz-project
+          if [ -d "nova-kz-project/nova-kz" ]; then
+            shopt -s dotglob
+            mv nova-kz-project/nova-kz/* nova-kz-project/
+            rmdir nova-kz-project/nova-kz
+          fi
+      - name: Inspect authentication and balance flow
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("nova-kz-project")
+          wanted = [
+              "SupabaseEndpoints.kt",
+              "LocalDataStore.kt",
+              "PaymentManager.kt",
+              "NovaKzSupabaseEndToEndAuditTest.kt",
+          ]
+
+          files = []
+          for p in root.rglob("*"):
+              if p.is_file() and (p.name in wanted or ("auth" in p.name.lower() and p.suffix in {".kt",".kts"})):
+                  files.append(p)
+
+          for p in sorted(files):
+              print("\n===== " + str(p.relative_to(root)) + " =====")
+              try:
+                  s = p.read_text(errors="replace")
+              except Exception as e:
+                  print("READ_ERROR", e)
+                  continue
+              # Never print credential values.
+              s = re.sub(r'(?i)(service_role|anon[_-]?key|publishable[_-]?key|access[_-]?token|refresh[_-]?token|api[_-]?key)\s*[:=]\s*["\']?[^"\'\\s,}]+', r'\\1=<REDACTED>', s)
+              lines = s.splitlines()
+              keywords = ("supabase", "auth", "session", "bank_accounts", "balance", "local", "default", "user_id", "access_token")
+              for i, line in enumerate(lines, 1):
+                  if any(k in line.lower() for k in keywords):
+                      lo=max(1,i-3); hi=min(len(lines),i+3)
+                      print(f"--- lines {lo}-{hi} ---")
+                      for n in range(lo,hi+1):
+                          print(f"{n}: {lines[n-1]}")
+          PY
