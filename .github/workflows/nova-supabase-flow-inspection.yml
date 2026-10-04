@@ -2,6 +2,11 @@ name: NOVA KZ Supabase Flow Inspection
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'nova-kz.zip'
+      - '.github/workflows/nova-supabase-flow-inspection.yml'
 
 permissions:
   contents: read
