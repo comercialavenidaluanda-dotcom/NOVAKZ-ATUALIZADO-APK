@@ -38,6 +38,7 @@ jobs:
               "SupabaseEndpoints.kt",
               "LocalDataStore.kt",
               "PaymentManager.kt",
+              "SupabaseRestClient.kt",
               "NovaKzSupabaseEndToEndAuditTest.kt",
           ]
 
