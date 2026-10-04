@@ -1,0 +1,45 @@
+name: NOVA KZ Python Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "nova-kz.zip"
+      - "tools/nova_audit/**"
+      - ".github/workflows/nova-python-audit.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install audit dependencies
+        run: python -m pip install -r tools/nova_audit/requirements.txt pytest
+
+      - name: Run Python unit tests
+        working-directory: tools/nova_audit
+        run: pytest -q
+
+      - name: Run NOVA KZ source audit
+        run: |
+          test -f nova-kz.zip
+          python tools/nova_audit/auditor.py --zip nova-kz.zip --json | tee nova-python-audit.json
+
+      - name: Upload audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-kz-python-audit
+          path: nova-python-audit.json
+          retention-days: 30
