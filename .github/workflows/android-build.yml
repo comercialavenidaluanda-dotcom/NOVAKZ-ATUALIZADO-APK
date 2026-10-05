@@ -15,28 +15,36 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_NDK_VERSION: 27.2.12479018
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - name: Setup Gradle 9.3.1
+
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
-      - name: Prepare Android SDK
+
+      - name: Prepare Android SDK, NDK and CMake
         run: |
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/cmdline-tools/16.0/bin:$ANDROID_HOME/platform-tools:$PATH"
           sdkmanager --version
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;$ANDROID_NDK_VERSION" "cmake;3.22.1"
+          echo "Android SDK: $ANDROID_HOME"
+          echo "Android NDK: $ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+          echo "CMake: $ANDROID_HOME/cmake/3.22.1"
+
       - name: Extract NOVA KZ project
         run: |
           rm -rf nova-kz-project
@@ -50,42 +58,68 @@ jobs:
           test -f nova-kz-project/settings.gradle.kts
           test -f nova-kz-project/app/build.gradle.kts
           test -f nova-kz-project/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Detect native C++ module
+        working-directory: nova-kz-project
+        run: |
+          if find . -type f \( -name '*.cpp' -o -name '*.cc' -o -name '*.cxx' \) | grep -q .; then
+            echo "NOVA_NATIVE_CPP=true" >> "$GITHUB_ENV"
+            echo "C++ sources detected."
+          else
+            echo "NOVA_NATIVE_CPP=false" >> "$GITHUB_ENV"
+            echo "No C++ sources detected in this snapshot."
+          fi
+
       - name: Apply NOVA Supabase client fix
         run: |
           python3 tools/nova_patch_supabase.py nova-kz-project
           grep -R "PUBLISHABLE_KEY" -n nova-kz-project/app/src/main/java/com/example/network/SupabaseEndpoints.kt
           grep -R "Configuração do Supabase não está disponível" -n nova-kz-project/app/src/main/java/com/example/network/SupabaseRestClient.kt || true
+
       - name: Generate debug keystore for CI fallback
         working-directory: nova-kz-project
         run: |
-          keytool -genkeypair -v             -keystore debug.keystore             -storepass android             -alias androiddebugkey             -keypass android             -keyalg RSA             -keysize 2048             -validity 10000             -dname "CN=Android Debug,O=Android,C=US" || true
-      - name: Run NOVA production architecture and unit tests
+          keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" || true
+
+      - name: Run targeted NOVA tests
         working-directory: nova-kz-project
         continue-on-error: true
         run: |
           set +e
-          gradle --no-daemon :app:testDebugUnitTest \
-            --tests "com.example.NovaApkProductionArchitectureTest" \
-            --tests "com.example.NovaKzSupabaseEndToEndAuditTest" \
-            --tests "com.example.LegalAcceptanceAndComplianceTest" \
-            --tests "com.example.SandboxBalanceSourceOfTruthTest" \
-            --tests "com.example.PaymentSandboxFlowTest"
-          targeted_status=$?
-          echo "targeted_tests_exit_code=$targeted_status" >> "$GITHUB_STEP_SUMMARY"
-          gradle --no-daemon :app:testDebugUnitTest
-          full_status=$?
-          echo "full_unit_tests_exit_code=$full_status" >> "$GITHUB_STEP_SUMMARY"
-          echo "Unit-test diagnostics are currently non-blocking so the APK can be built while the Robolectric/SDK test harness issue is repaired." >> "$GITHUB_STEP_SUMMARY"
+          gradle --no-daemon :app:testDebugUnitTest --tests "com.example.NovaApkProductionArchitectureTest" --tests "com.example.NovaKzSupabaseEndToEndAuditTest" --tests "com.example.LegalAcceptanceAndComplianceTest" --tests "com.example.SandboxBalanceSourceOfTruthTest" --tests "com.example.PaymentSandboxFlowTest"
+          status=$?
+          echo "targeted_tests_exit_code=$status" >> "$GITHUB_STEP_SUMMARY"
           exit 0
+
+      - name: Run full unit tests
+        working-directory: nova-kz-project
+        continue-on-error: true
+        run: |
+          set +e
+          gradle --no-daemon :app:testDebugUnitTest
+          status=$?
+          echo "full_unit_tests_exit_code=$status" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
       - name: Build debug APK
         working-directory: nova-kz-project
         run: gradle --no-daemon :app:assembleDebug
+
+      - name: Verify debug APK
+        working-directory: nova-kz-project
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          sha256sum app/build/outputs/apk/debug/app-debug.apk | tee debug-apk.sha256
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
+
       - name: Build release APK
         working-directory: nova-kz-project
         run: gradle --no-daemon :app:assembleRelease
+
       - name: Build release AAB
         working-directory: nova-kz-project
         run: gradle --no-daemon :app:bundleRelease
+
       - name: Collect build artifacts
         run: |
           mkdir -p artifacts
@@ -94,6 +128,7 @@ jobs:
           cp nova-kz-project/app/build/outputs/bundle/release/*.aab artifacts/nova-kz-release.aab
           sha256sum artifacts/* > artifacts/SHA256SUMS.txt
           ls -lh artifacts
+
       - name: Upload APK and AAB
         uses: actions/upload-artifact@v4
         with:
